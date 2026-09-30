@@ -311,6 +311,16 @@ func (d *Driver) GetMetadata(id string) (map[string]string, error) {
 		metadata["LowerDir"] = strings.Join(lowerDirs, ":")
 	}
 
+	// DSec PoC (wip/03-phase-1.md §24): expose the external EROFS lowers
+	// via `docker inspect` (GraphDriver.Data.DSecLowerDir).
+	dsecLowers, err := d.getDsecLowers(id)
+	if err != nil {
+		return nil, err
+	}
+	if len(dsecLowers) > 0 {
+		metadata["DSecLowerDir"] = strings.Join(dsecLowers, ":")
+	}
+
 	return metadata, nil
 }
 
