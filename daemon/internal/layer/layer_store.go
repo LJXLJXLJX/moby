@@ -660,9 +660,21 @@ func (ls *layerStore) initMount(graphID, parent, mountLabel string, initFunc Mou
 	// then the initID should be randomly generated.
 	initID := graphID + "-init"
 
+	// DSec PoC (wip/03-phase-1.md §19): external lowerdirs apply only to
+	// the container's RW layer. Passing them to the init layer would
+	// compose the init layer with external lowers, so exclude the option
+	// here.
+	initStorageOpt := make(map[string]string, len(storageOpt))
+	for k, v := range storageOpt {
+		if k == graphdriver.DsecLowerDirsOpt {
+			continue
+		}
+		initStorageOpt[k] = v
+	}
+
 	createOpts := &graphdriver.CreateOpts{
 		MountLabel: mountLabel,
-		StorageOpt: storageOpt,
+		StorageOpt: initStorageOpt,
 	}
 
 	if err := ls.driver.CreateReadWrite(initID, parent, createOpts); err != nil {
