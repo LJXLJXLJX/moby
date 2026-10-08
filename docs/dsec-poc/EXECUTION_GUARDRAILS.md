@@ -78,6 +78,12 @@ init layer/link 的 create 错误回滚残留使 Gate 未通过（workspace NOTE
 
 ## E. Phase 1A scope
 
+**最新授权与状态（2026-10-08，§5.1 收尾）**：用户明确授权最小 init rollback
+修复、原 1E 重跑及顺序推进本地并发/benchmark；替代 D 节的待授权状态。
+独立分支 `feat/dsec-erofs-composition-5.1`；`279b4097b0` 修复后 1E 原矩阵
+151/151 PASS（workspace RESULTS / NOTES N-25）。1A～1D 继续有效且不重跑。
+1F 完整 Gate 未通过前不进 1G。不开发 §5.3 / Phase 2/3，不强推或重写历史。
+
 Phase 1A 只做：
 
 ```text
