@@ -23,6 +23,15 @@ Docker/runc container
 
 最终经薄 Sandbox Adapter 接入 Harbor。
 
+本 workspace 参考 arXiv:2609.22978v1 **DeepSeek Elastic Compute (DSec)** 的
+部分设计思路，重点是 workspace/toolkit 解耦、共享只读 EROFS 与私有 upper 的
+组合及批量启动效率。完整 agent 阅读版在 workspace
+`docs/papers/dsec-2609.22978v1/paper.md`，同目录保存官方 PDF/HTML 和 LaTeX
+source，可核对图表、公式与原文。优先参考 §5.1 / §5.3 / §8.2 / §8.3。
+论文不是当前 Moby 调用链或本地性能的 source of truth；关键判断仍须检查实际
+源码和实验。本 PoC 不含完整 3FS 按需加载、调度和 overcommit，不外推论文规模
+或性能结论，不因论文内容扩展已授权 Phase 的范围。
+
 首要研究目标是提高大规模 sandbox 的批量启动效率和并发能力。Task image 解耦
 主要用于缩短创建请求到 task ready 的时间，减少重复准备、拉取和物化；维护成本
 是次要收益。后续性能设计见 workspace `docs/dsec-poc/PERFORMANCE.md`。
