@@ -75,6 +75,18 @@ const (
 	lowerFile     = "lower"
 	maxDepth      = 128
 
+	// DSec PoC (wip/03-phase-1.md §17): per-layer file holding the
+	// pre-mounted EROFS lower directories of a container's RW layer,
+	// one canonical absolute path per line, highest priority first.
+	dsecLowerFile = "dsec-lowerdirs"
+	// dsecLowerRoot (§18): external lowers must resolve below this root.
+	// Single definition — adjust here if EROFS_MOUNT_ROOT changes.
+	dsecLowerRoot = "/run/dsec/l"
+	// dsecMaxLowers (§18): maximum number of external lowers per container.
+	dsecMaxLowers = 8
+	// erofsSuperMagic is EROFS_SUPER_MAGIC_V1 from linux/magic.h.
+	erofsSuperMagic = 0xe0f5e1e2
+
 	// idLength represents the number of random characters
 	// which can be used to create the unique link identifier
 	// for every layer. If this value is too long then the
@@ -299,6 +311,16 @@ func (d *Driver) GetMetadata(id string) (map[string]string, error) {
 		metadata["LowerDir"] = strings.Join(lowerDirs, ":")
 	}
 
+	// DSec PoC (wip/03-phase-1.md §24): expose the external EROFS lowers
+	// via `docker inspect` (GraphDriver.Data.DSecLowerDir).
+	dsecLowers, err := d.getDsecLowers(id)
+	if err != nil {
+		return nil, err
+	}
+	if len(dsecLowers) > 0 {
+		metadata["DSecLowerDir"] = strings.Join(dsecLowers, ":")
+	}
+
 	return metadata, nil
 }
 
@@ -339,6 +361,9 @@ func (d *Driver) Create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 		if _, ok := opts.StorageOpt["size"]; ok {
 			return errors.New("--storage-opt size is only supported for ReadWrite Layers")
 		}
+		if _, ok := opts.StorageOpt[graphdriver.DsecLowerDirsOpt]; ok {
+			return errors.New("--storage-opt " + graphdriver.DsecLowerDirsOpt + " is only supported for ReadWrite Layers")
+		}
 	}
 	return d.create(id, parent, opts)
 }
@@ -358,6 +383,20 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 			os.RemoveAll(dir)
 		}
 	}()
+
+	// DSec PoC (wip/03-phase-1.md §17/§18): take the external lowerdirs
+	// option out of the map before the generic storage-opt parser rejects
+	// it as unknown, validate it, and persist it next to the layer.
+	var dsecStored bool
+	if opts != nil {
+		if raw, ok := opts.StorageOpt[graphdriver.DsecLowerDirsOpt]; ok {
+			delete(opts.StorageOpt, graphdriver.DsecLowerDirsOpt)
+			if err := d.dsecStoreLowers(id, raw); err != nil {
+				return err
+			}
+			dsecStored = true
+		}
+	}
 
 	if opts != nil && len(opts.StorageOpt) > 0 {
 		driver := &Driver{}
@@ -387,8 +426,15 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 		return err
 	}
 
-	// if no parent directory, done
+	// if no parent directory, done. DSec PoC (wip/03-phase-1.md §20):
+	// a scratch layer with external lowers still needs a work dir so
+	// that Get() can mount an overlay on top of it.
 	if parent == "" {
+		if dsecStored {
+			if err := user.MkdirAndChown(path.Join(dir, workDirName), 0o700, uid, gid); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -459,6 +505,87 @@ func (d *Driver) getLower(parent string) (string, error) {
 	return strings.Join(lowers, ":"), nil
 }
 
+// dsecValidateLower validates one external lower path and returns its
+// canonical absolute form (wip/03-phase-1.md §18): absolute, cleaned,
+// symlink-resolved below dsecLowerRoot, an existing directory located on
+// an EROFS filesystem, and free of ',' or newline.
+func dsecValidateLower(p string) (string, error) {
+	if !filepath.IsAbs(p) {
+		return "", fmt.Errorf("dsec.lowerdirs: path %q is not absolute", p)
+	}
+	clean := filepath.Clean(p)
+	if strings.ContainsAny(clean, ",\n") {
+		return "", fmt.Errorf("dsec.lowerdirs: path %q contains forbidden characters", p)
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return "", fmt.Errorf("dsec.lowerdirs: cannot resolve %q: %w", p, err)
+	}
+	if !strings.HasPrefix(resolved, dsecLowerRoot+"/") {
+		return "", fmt.Errorf("dsec.lowerdirs: path %q resolves to %q, outside allowed root %s", p, resolved, dsecLowerRoot)
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("dsec.lowerdirs: cannot access %q: %w", p, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("dsec.lowerdirs: path %q is not a directory", p)
+	}
+	var st unix.Statfs_t
+	if err := unix.Statfs(resolved, &st); err != nil {
+		return "", fmt.Errorf("dsec.lowerdirs: statfs %q: %w", p, err)
+	}
+	if st.Type != erofsSuperMagic {
+		return "", fmt.Errorf("dsec.lowerdirs: path %q is not on an EROFS filesystem", p)
+	}
+	return resolved, nil
+}
+
+// dsecStoreLowers validates the raw dsec.lowerdirs option value
+// (colon-separated, highest priority first) and persists the canonical
+// paths to the layer's dsecLowerFile, one per line (wip/03-phase-1.md §17).
+func (d *Driver) dsecStoreLowers(id, raw string) error {
+	var lowers []string
+	for _, p := range strings.Split(raw, ":") {
+		if p == "" {
+			return fmt.Errorf("dsec.lowerdirs: empty path in %q", raw)
+		}
+		resolved, err := dsecValidateLower(p)
+		if err != nil {
+			return err
+		}
+		lowers = append(lowers, resolved)
+	}
+	if len(lowers) == 0 {
+		return fmt.Errorf("dsec.lowerdirs: no paths given")
+	}
+	if len(lowers) > dsecMaxLowers {
+		return fmt.Errorf("dsec.lowerdirs: too many lower dirs (%d > %d)", len(lowers), dsecMaxLowers)
+	}
+	return atomicwriter.WriteFile(path.Join(d.dir(id), dsecLowerFile), []byte(strings.Join(lowers, "\n")+"\n"), 0o644)
+}
+
+// getDsecLowers returns the external lower dirs persisted for this layer,
+// or nil if there are none. Paths are re-validated by the caller at mount
+// time so an unmounted EROFS fails explicitly instead of silently
+// mounting an empty directory (wip/03-phase-1.md §18, no silent fallback).
+func (d *Driver) getDsecLowers(id string) ([]string, error) {
+	data, err := os.ReadFile(path.Join(d.dir(id), dsecLowerFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var lowers []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lowers = append(lowers, line)
+		}
+	}
+	return lowers, nil
+}
+
 func (d *Driver) dir(id string) string {
 	return path.Join(d.home, id)
 }
@@ -521,13 +648,24 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 	}
 
 	diffDir := path.Join(dir, diffDirName)
+
+	// DSec PoC (wip/03-phase-1.md §21): external EROFS lowers for this layer.
+	dsecLowers, err := d.getDsecLowers(id)
+	if err != nil {
+		return "", err
+	}
+
 	lowers, err := os.ReadFile(path.Join(dir, lowerFile))
 	if err != nil {
-		// If no lower, just return diff directory
-		if os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		// If no lower, just return diff directory — unless external DSec
+		// lowers exist (a scratch layer with external lowers still needs
+		// an overlay mount, wip/03-phase-1.md §20).
+		if len(dsecLowers) == 0 {
 			return diffDir, nil
 		}
-		return "", err
 	}
 
 	mergedDir := path.Join(dir, mergedDirName)
@@ -549,10 +687,25 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 	}()
 
 	workDir := path.Join(dir, workDirName)
-	splitLowers := strings.Split(string(lowers), ":")
-	absLowers := make([]string, len(splitLowers))
-	for i, s := range splitLowers {
-		absLowers[i] = path.Join(d.home, s)
+	var absLowers []string
+	if len(lowers) > 0 {
+		splitLowers := strings.Split(string(lowers), ":")
+		absLowers = make([]string, len(splitLowers))
+		for i, s := range splitLowers {
+			absLowers[i] = path.Join(d.home, s)
+		}
+	}
+
+	// DSec PoC (wip/03-phase-1.md §18, §22): re-validate external lowers at
+	// mount time so an unmounted EROFS fails explicitly instead of silently
+	// mounting an empty directory, and count them towards the depth limit.
+	for _, lower := range dsecLowers {
+		if _, err := dsecValidateLower(lower); err != nil {
+			return "", err
+		}
+	}
+	if len(dsecLowers)+len(absLowers) > maxDepth {
+		return "", fmt.Errorf("max depth exceeded (external %d + image %d > %d)", len(dsecLowers), len(absLowers), maxDepth)
 	}
 	var readonly bool
 	if _, err := os.Stat(path.Join(dir, "committed")); err == nil {
@@ -561,11 +714,19 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 		return "", err
 	}
 
+	// DSec PoC (wip/03-phase-1.md §21): external lowers are prepended so
+	// they take priority over all Docker lowers (lowerdir= is ordered
+	// highest priority first).
+	allLowers := absLowers
+	if len(dsecLowers) > 0 {
+		allLowers = append(append([]string{}, dsecLowers...), absLowers...)
+	}
+
 	var opts string
 	if readonly {
 		opts = indexOff + userxattr + "lowerdir=" + diffDir + ":" + strings.Join(absLowers, ":")
 	} else {
-		opts = indexOff + userxattr + "lowerdir=" + strings.Join(absLowers, ":") + ",upperdir=" + diffDir + ",workdir=" + workDir
+		opts = indexOff + userxattr + "lowerdir=" + strings.Join(allLowers, ":") + ",upperdir=" + diffDir + ",workdir=" + workDir
 	}
 
 	mountData := label.FormatMountLabel(opts, mountLabel)
@@ -584,6 +745,13 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 	// fit within a page and relative links make the mount data much
 	// smaller at the expense of requiring a fork exec to chroot.
 	if len(mountData) > pageSize-1 {
+		// DSec PoC (wip/03-phase-1.md §23): the relative-path fallback below
+		// only works for paths inside the driver home; external lowers are
+		// absolute and outside it, so fail explicitly instead of dropping
+		// them from the mount options.
+		if len(dsecLowers) > 0 {
+			return "", fmt.Errorf("cannot mount layer with %d external lowerdirs: mount data too large (%d bytes > %d)", len(dsecLowers), len(mountData), pageSize-1)
+		}
 		if readonly {
 			opts = indexOff + userxattr + "lowerdir=" + path.Join(id, diffDirName) + ":" + string(lowers)
 		} else {
@@ -612,6 +780,18 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 		}
 	}
 
+	// DSec PoC: observability (guardrail K) — make the composed mount
+	// visible in the daemon debug log: layer id, external lowers, number
+	// of Docker lowers and the upper dir.
+	if len(dsecLowers) > 0 {
+		logger.WithFields(log.Fields{
+			"layer":         id,
+			"dsec-lowers":   dsecLowers,
+			"docker-lowers": len(absLowers),
+			"upperdir":      diffDir,
+		}).Debug("dsec: overlay mount composed with external EROFS lowers")
+	}
+
 	return mergedDir, nil
 }
 
@@ -624,11 +804,17 @@ func (d *Driver) Put(id string) error {
 	dir := d.dir(id)
 	_, err := os.ReadFile(path.Join(dir, lowerFile))
 	if err != nil {
-		// If no lower, no mount happened and just return directly
-		if os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		// If no lower, no mount happened and just return directly —
+		// unless external DSec lowers forced a mount (wip/03-phase-1.md §20).
+		if _, dsecErr := os.Stat(path.Join(dir, dsecLowerFile)); dsecErr != nil {
+			if !os.IsNotExist(dsecErr) {
+				return dsecErr
+			}
 			return nil
 		}
-		return err
 	}
 
 	mountpoint := path.Join(dir, mergedDirName)
