@@ -25,6 +25,12 @@ type CreateOpts struct {
 	StorageOpt map[string]string
 }
 
+// DsecLowerDirsOpt is the storage option for pre-mounted EROFS lower
+// directories, ordered highest priority first and separated by colons.
+// Only overlay2 consumes it for container writable layers; container init
+// layers do not receive it.
+const DsecLowerDirsOpt = "dsec.lowerdirs"
+
 // InitFunc initializes the storage driver.
 type InitFunc func(root string, options []string, idMap user.IdentityMapping) (Driver, error)
 

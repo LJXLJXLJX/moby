@@ -530,6 +530,15 @@ func (ls *layerStore) CreateRWLayer(name string, parent ChainID, opts *CreateRWL
 			return nil, err
 		}
 		m.initID = parentID
+		// initMount only rolls back its own failures. Once it succeeds, this
+		// caller owns cleanup if creating or saving the RW layer fails.
+		defer func() {
+			if retErr != nil {
+				if err := ls.driver.Remove(m.initID); err != nil {
+					log.G(context.TODO()).WithFields(log.Fields{"init-id": m.initID, "error": err}).Error("Failed to clean up init layer after RW layer creation error")
+				}
+			}
+		}()
 	}
 
 	createOpts := &graphdriver.CreateOpts{
@@ -660,9 +669,19 @@ func (ls *layerStore) initMount(graphID, parent, mountLabel string, initFunc Mou
 	// then the initID should be randomly generated.
 	initID := graphID + "-init"
 
+	// External lower directories apply only to the container's RW layer.
+	// Exclude the option here so the init layer is not composed with them.
+	initStorageOpt := make(map[string]string, len(storageOpt))
+	for k, v := range storageOpt {
+		if k == graphdriver.DsecLowerDirsOpt {
+			continue
+		}
+		initStorageOpt[k] = v
+	}
+
 	createOpts := &graphdriver.CreateOpts{
 		MountLabel: mountLabel,
-		StorageOpt: storageOpt,
+		StorageOpt: initStorageOpt,
 	}
 
 	if err := ls.driver.CreateReadWrite(initID, parent, createOpts); err != nil {
