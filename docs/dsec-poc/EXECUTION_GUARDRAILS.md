@@ -23,6 +23,10 @@ Docker/runc container
 
 最终经薄 Sandbox Adapter 接入 Harbor。
 
+首要研究目标是提高大规模 sandbox 的批量启动效率和并发能力。Task image 解耦
+主要用于缩短创建请求到 task ready 的时间，减少重复准备、拉取和物化；维护成本
+是次要收益。后续性能设计见 workspace `docs/dsec-poc/PERFORMANCE.md`。
+
 ## B. Moby patch 必须保持最小化
 
 Moby 只负责：消费 pre-mounted EROFS path，修改 rootfs lower composition。
@@ -53,6 +57,12 @@ seccomp、capabilities、exec、logs、OCI image、cleanup。
 
 > **Phase 1A 完成后必须 STOP & REPORT，不允许自动继续 1B~1F。**
 > 先汇报代码 diff 和实验结果，由人确认后再继续。
+
+**当前进度补充（2026-10-08）**：Phase 1A～1D 已完成，历史 Gate、结果及 commit
+继续有效；不得重跑、推翻、重构或重新编号。上述 1A 停止规则已履行，保留为历史
+阶段纪律。当前停在 1D 后，待人工确认 1E；后续按 1E → 1F → 新增 1G 推进。
+1F 为 A/B/C 并发对照，1G 为 task image 解耦与启动性能。Phase 2 / 3 保持原计划，
+在新性能 Gate 完成及继续决策前暂缓。本次仅计划修订，不授权执行新实验。
 
 ## E. Phase 1A scope
 
@@ -159,6 +169,23 @@ git log --oneline <baseline>..HEAD
 实验失败不是需要隐藏的结果。kernel/filesystem/Docker 异常记录到 workspace
 `docs/dsec-poc/NOTES.md`；通过的 gate、命令、输出摘要记录到 workspace
 `docs/dsec-poc/RESULTS.md`。不要反复修改测试条件直到"看起来成功"而不记录失败路径。
+
+## O. 后续性能研究约束
+
+- 区分 Burst Creation Throughput（单位时间创建并 ready 数）与 Steady-state
+  Density（固定实际任务负载、SLO、资源限制下单节点稳定承载数）；分别报告。
+- 比较 A 已缓存完整 OCI、B base + 每 sandbox tar.gz 解压/复制、C base + 共享
+  pre-mounted EROFS；同 task 内容、权限、工具、依赖、环境、最终命令与 readiness。
+  不预设 C 优于 A；A/C 验证对已缓存 OCI 的收益，B/C 验证免重复物化收益。
+- 本地不包含完整 DSec 的 3FS 按需加载，不能外推为完整 DSec 性能收益。
+- 保留已完成 correctness Gate，不跳过 1E。性能研究先小规模可复现，再扩数据规模
+  与并发；至少一个真实 SWE/Harbor task，不能以空容器、sleep 或极小文件证明收益。
+- 离线构建与 warm-start 分开，warm/cold cache 分开；无法控制缓存时标注条件。
+  同机同限制、方案之间无资源竞争、多轮原始数据与失败样本、SHA/配置/命令均留存。
+- 不为并发数字修改 Moby 调度、内存管理、CPU overcommit；现有 Moby 实现保持不变，
+  后续数据证明必要时才讨论最小修改，不把 benchmark 或 artifact 管理塞入 Moby。
+- 未经明确授权不得全局 drop_caches、Docker prune 或破坏性清理。资源限制、停止
+  条件及 Gate 统一见 workspace `docs/dsec-poc/PERFORMANCE.md`，不另设冲突标准。
 
 ---
 
