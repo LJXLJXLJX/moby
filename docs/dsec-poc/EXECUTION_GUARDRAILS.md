@@ -84,6 +84,14 @@ init layer/link 的 create 错误回滚残留使 Gate 未通过（workspace NOTE
 151/151 PASS（workspace RESULTS / NOTES N-25）。1A～1D 继续有效且不重跑。
 1F 完整 Gate 未通过前不进 1G。不开发 §5.3 / Phase 2/3，不强推或重写历史。
 
+**本轮冻结状态（2026-10-08）**：§5.1 本地共享 lower 子集已完成：P1E 151/151；
+A/B/C2 × 1/16/64/128 × 3 轮 1881/1881 ready、627 次预期 create 拒绝自动回滚、
+零本轮 mount/loop/metadata/shim 残留。C3/Monolithic 本地入口已验证；runtime 仍为
+279b4097b0，实验工具在 workspace（最终 2f6b18e），daemon 已停止，offline/raw 保留。
+完整 P1F/P1G 的 steady/cold/不同复用档未测，不能报 Gate PASS。按用户本轮停止条件
+停止新增功能/实验，不自动扩大 matrix 或实现 §5.3；交付见 workspace
+`docs/dsec-poc/FINAL_REPORT.md`、`PERFORMANCE_REPORT.md`、`FROZEN_BASELINE.json`。
+
 Phase 1A 只做：
 
 ```text
