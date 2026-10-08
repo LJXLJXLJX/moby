@@ -60,9 +60,12 @@ seccomp、capabilities、exec、logs、OCI image、cleanup。
 
 **当前进度补充（2026-10-08）**：Phase 1A～1D 已完成，历史 Gate、结果及 commit
 继续有效；不得重跑、推翻、重构或重新编号。上述 1A 停止规则已履行，保留为历史
-阶段纪律。当前停在 1D 后，待人工确认 1E；后续按 1E → 1F → 新增 1G 推进。
+阶段纪律。用户随后确认进入 1E；原 13 项已执行，151 断言中 127 PASS / 24 FAIL，
+init layer/link 的 create 错误回滚残留使 Gate 未通过（workspace NOTES N-23）。
+本轮资源已精确回收、实验 daemon 已停止。停在 1E；仅修复该 Moby 失败路径需
+另行明确授权，不重跑 1A～1D。后续按 1E → 1F → 新增 1G 推进，未过 Gate 不升级。
 1F 为 A/B/C 并发对照，1G 为 task image 解耦与启动性能。Phase 2 / 3 保持原计划，
-在新性能 Gate 完成及继续决策前暂缓。本次仅计划修订，不授权执行新实验。
+在新性能 Gate 完成及继续决策前暂缓。初次修订仅授权文档，随后授权仅扩至 1E。
 
 ## E. Phase 1A scope
 
