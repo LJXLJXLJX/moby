@@ -530,6 +530,15 @@ func (ls *layerStore) CreateRWLayer(name string, parent ChainID, opts *CreateRWL
 			return nil, err
 		}
 		m.initID = parentID
+		// initMount only rolls back its own failures. Once it succeeds, this
+		// caller owns cleanup if creating or saving the RW layer fails.
+		defer func() {
+			if retErr != nil {
+				if err := ls.driver.Remove(m.initID); err != nil {
+					log.G(context.TODO()).WithFields(log.Fields{"init-id": m.initID, "error": err}).Error("Failed to clean up init layer after RW layer creation error")
+				}
+			}
+		}()
 	}
 
 	createOpts := &graphdriver.CreateOpts{
