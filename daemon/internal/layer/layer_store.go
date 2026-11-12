@@ -673,7 +673,7 @@ func (ls *layerStore) initMount(graphID, parent, mountLabel string, initFunc Mou
 	// Exclude the option here so the init layer is not composed with them.
 	initStorageOpt := make(map[string]string, len(storageOpt))
 	for k, v := range storageOpt {
-		if k == graphdriver.DsecLowerDirsOpt {
+		if k == graphdriver.ExternalLowerDirsOpt {
 			continue
 		}
 		initStorageOpt[k] = v
